@@ -10,11 +10,13 @@ import io.vertx.ext.web.handler.StaticHandler;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Created by eric on 07/10/15.
  */
-public class KeyringVerticle extends AbstractVerticle{
+public class KeyringVerticle extends AbstractVerticle {
 
     private KeystoreProvider provider = new KeystoreProvider();
 
@@ -47,7 +49,9 @@ public class KeyringVerticle extends AbstractVerticle{
         // Serve static resources from the /assets directory
         router.route("/assets/*").handler(StaticHandler.create("assets"));
 
-        router.route("/keyring/secret-keys").handler(this::getAllKeyName);
+        router.route("/keyring/aliases").handler(this::getAllKeyNames);
+        router.route("/keyring/secret-keys").handler(this::getAllKeys);
+        router.route("/keyring/secret-key/:alias").handler(this::getAllKeys);
 
 
         // Create the HTTP server and pass the "accept" method to the request handler.
@@ -63,9 +67,38 @@ public class KeyringVerticle extends AbstractVerticle{
             });
     }
 
-    public void getAllKeyName(RoutingContext routingContext) {
+    public void getAllKeyNames(RoutingContext routingContext) {
+        vertx.executeBlocking(future -> {
+            // Call some blocking API that takes a significant amount of time to return
+            Set<String> result = provider.listAlias();
+            future.complete(result);
+        }, res -> {
+            final Object result = res.result();
+            routingContext.response()
+                    .putHeader("content-type", "application/json; charset=utf-8")
+                    .end(Json.encodePrettily(result));
+        });
+
+
+        /*routingContext.response()
+                .putHeader("content-type", "application/json; charset=utf-8")
+                .end(Json.encodePrettily(provider.listAlias()));*/
+    }
+
+    public void getAllKeys(RoutingContext routingContext) {
         routingContext.response()
                 .putHeader("content-type", "application/json; charset=utf-8")
                 .end(Json.encodePrettily(provider.listSecretKeys()));
+    }
+
+    public void getKey(RoutingContext routingContext) {
+        Optional<String> aliasParam = Optional.of(routingContext.request().getParam("id"));
+        if (aliasParam.isPresent()) {
+            routingContext.response()
+                    .putHeader("content-type", "application/json; charset=utf-8")
+                    .end(Json.encodePrettily(provider.getSecretKey(aliasParam.get())));
+        } else {
+            routingContext.response().setStatusCode(400).end();
+        }
     }
 }

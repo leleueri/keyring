@@ -52,7 +52,7 @@ public class KeystoreProvider {
     }
 
     public Map<String, SecretKey> listSecretKeys() {
-        TreeMap<String, SecretKey> result = new TreeMap<>(); // TODO faire deux method (une qui retourne que l'alias, l'autre les bean)
+        TreeMap<String, SecretKey> result = new TreeMap<>();
         try {
             Enumeration<String> aliases = ks.aliases();
             while (aliases.hasMoreElements()) {
@@ -71,6 +71,38 @@ public class KeystoreProvider {
             throw new KeyringApplicativeException("Unable to list Aliases from the keystore instance", e);
         } catch (NoSuchAlgorithmException|UnrecoverableKeyException e) {
             throw new KeyringApplicativeException("Unable to read key", e);
+        }
+        return result;
+    }
+
+    public SecretKey getSecretKey(String alias) {
+        try {
+            final Key key = ks.getKey(alias, keyPassword.toCharArray());
+            SecretKey sKey = new SecretKey();
+            sKey.setAlias(alias);
+            sKey.setAlgorithm(key.getAlgorithm());
+            sKey.setFormat(key.getFormat());
+            sKey.setB64Key(new BASE64Encoder().encode(key.getEncoded()));
+            return sKey;
+        } catch (KeyStoreException e) {
+            throw new KeyringApplicativeException("Unable to read alias '" + alias + "' from the keystore instance", e);
+        } catch (NoSuchAlgorithmException|UnrecoverableKeyException e) {
+            throw new KeyringApplicativeException("Unable to read key", e);
+        }
+    }
+
+    public Set<String> listAlias() {
+        TreeSet<String> result = new TreeSet<>();
+        try {
+            Enumeration<String> aliases = ks.aliases();
+            while (aliases.hasMoreElements()) {
+                String alias = aliases.nextElement();
+                if (ks.isKeyEntry(alias)) {
+                    result.add(alias);
+                }
+            }
+        } catch (KeyStoreException e) {
+            throw new KeyringApplicativeException("Unable to list Aliases from the keystore instance", e);
         }
         return result;
     }
