@@ -1,5 +1,7 @@
 package io.github.leleueri.keyring;
 
+import io.github.leleueri.keyring.bean.SecretKey;
+import io.github.leleueri.keyring.provider.KeystoreProvider;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.http.HttpServerResponse;
@@ -8,8 +10,8 @@ import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.StaticHandler;
 
-import java.util.Arrays;
-import java.util.List;
+import javax.swing.text.html.Option;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -18,7 +20,7 @@ import java.util.Set;
  */
 public class KeyringVerticle extends AbstractVerticle {
 
-    private KeystoreProvider provider = new KeystoreProvider();
+    private KeystoreProvider provider;
 
     @java.lang.Override
     public void start(Future<java.lang.Void> fut) throws Exception {
@@ -30,10 +32,11 @@ public class KeyringVerticle extends AbstractVerticle {
         Integer port = config().getInteger("http.port", 8080);
 
         String type = config().getString("keystore.type", "JKS");
-        String path = config().getString("keystore.path", "JKS");
+        String path = config().getString("keystore.path", "keyring.jks");
         String pwd = config().getString("keystore.password");
         String keypwd = config().getString("secretkey.password");
-        provider.loadKeystore(type, pwd, path, keypwd);
+
+        provider = new KeystoreProvider(type, pwd, path, keypwd); // TODO check if the Provider is unique (may have several instance if the Keyring verticle is loaded more than once)
 
         // Create a router object.
         Router router = Router.router(vertx);
@@ -70,33 +73,59 @@ public class KeyringVerticle extends AbstractVerticle {
     public void getAllKeyNames(RoutingContext routingContext) {
         vertx.executeBlocking(future -> {
             // Call some blocking API that takes a significant amount of time to return
-            Set<String> result = provider.listAlias();
-            future.complete(result);
+            future.complete(provider.listAlias());
         }, res -> {
-            final Object result = res.result();
-            routingContext.response()
-                    .putHeader("content-type", "application/json; charset=utf-8")
-                    .end(Json.encodePrettily(result));
+            final Set<String> result = (Set<String>)res.result();
+            if (result.isEmpty()) {
+                routingContext.response().setStatusCode(204).end();
+            } else {
+                routingContext.response()
+                        .putHeader("content-type", "application/json; charset=utf-8")
+                        .end(Json.encodePrettily(result));
+            }
         });
 
+        /*
 
-        /*routingContext.response()
+        // blocking way (because Keystore action may be blocking)
+        routingContext.response()
                 .putHeader("content-type", "application/json; charset=utf-8")
-                .end(Json.encodePrettily(provider.listAlias()));*/
+                .end(Json.encodePrettily(provider.listAlias()));
+         */
     }
 
     public void getAllKeys(RoutingContext routingContext) {
-        routingContext.response()
-                .putHeader("content-type", "application/json; charset=utf-8")
-                .end(Json.encodePrettily(provider.listSecretKeys()));
+        // TODO try worker verticle to handle blocking action
+        vertx.executeBlocking(future -> {
+            future.complete(provider.listSecretKeys());
+        }, res -> {
+            final Map<String, SecretKey> result = (Map<String, SecretKey> )res.result();
+            if (result.isEmpty()) {
+                routingContext.response().setStatusCode(204).end();
+            } else {
+                routingContext.response()
+                        .putHeader("content-type", "application/json; charset=utf-8")
+                        .end(Json.encodePrettily(result));
+            }
+        });
+
     }
 
     public void getKey(RoutingContext routingContext) {
         Optional<String> aliasParam = Optional.of(routingContext.request().getParam("id"));
         if (aliasParam.isPresent()) {
-            routingContext.response()
-                    .putHeader("content-type", "application/json; charset=utf-8")
-                    .end(Json.encodePrettily(provider.getSecretKey(aliasParam.get())));
+            vertx.executeBlocking(future -> {
+                future.complete(provider.getSecretKey(aliasParam.get()));
+            }, res -> {
+                Optional<SecretKey> result = (Optional<SecretKey>)res.result();
+                if (result.isPresent()) {
+                    routingContext.response()
+                            .putHeader("content-type", "application/json; charset=utf-8")
+                            .end(Json.encodePrettily(res.result()));
+                } else {
+                    routingContext.response().setStatusCode(404).end();
+                }
+            });
         } else {
             routingContext.response().setStatusCode(400).end();
         }

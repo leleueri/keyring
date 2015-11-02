@@ -1,8 +1,9 @@
-package io.github.leleueri.keyring;
+package io.github.leleueri.keyring.provider;
 
 import io.github.leleueri.keyring.bean.SecretKey;
 import io.github.leleueri.keyring.exception.KeyringApplicativeException;
 import io.github.leleueri.keyring.exception.KeyringConfigurationException;
+import io.vertx.core.Handler;
 import sun.misc.BASE64Encoder;
 
 import java.io.FileNotFoundException;
@@ -13,6 +14,7 @@ import java.io.FileInputStream;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.util.*;
+import io.vertx.core.Future;
 
 /**
  * Created by eric on 07/10/15.
@@ -29,7 +31,11 @@ public class KeystoreProvider {
         }
     }
 
-    public void loadKeystore(String type, String pwd, String path, String keypwd) {
+    public KeystoreProvider(String type, String pwd, String path, String keypwd) {
+        loadKeystore(type, pwd, path, keypwd);
+    }
+
+    private void loadKeystore(String type, String pwd, String path, String keypwd) {
         assertNotNull(type, "Keystore Type");
         assertNotNull(pwd, "Keystore Password");
         assertNotNull(path, "Keystore Path");
@@ -75,15 +81,17 @@ public class KeystoreProvider {
         return result;
     }
 
-    public SecretKey getSecretKey(String alias) {
+    public Optional<SecretKey> getSecretKey(String alias) {
         try {
-            final Key key = ks.getKey(alias, keyPassword.toCharArray());
-            SecretKey sKey = new SecretKey();
-            sKey.setAlias(alias);
-            sKey.setAlgorithm(key.getAlgorithm());
-            sKey.setFormat(key.getFormat());
-            sKey.setB64Key(new BASE64Encoder().encode(key.getEncoded()));
-            return sKey;
+            final Optional<Key> optKey = Optional.of(ks.getKey(alias, keyPassword.toCharArray()));
+            return optKey.map(k -> {
+                SecretKey sKey = new SecretKey();
+                sKey.setAlias(alias);
+                sKey.setAlgorithm(k.getAlgorithm());
+                sKey.setFormat(k.getFormat());
+                sKey.setB64Key(new BASE64Encoder().encode(k.getEncoded()));
+                return sKey;
+            });
         } catch (KeyStoreException e) {
             throw new KeyringApplicativeException("Unable to read alias '" + alias + "' from the keystore instance", e);
         } catch (NoSuchAlgorithmException|UnrecoverableKeyException e) {
