@@ -1,6 +1,7 @@
 package io.github.leleueri.keyring;
 
 import io.github.leleueri.keyring.bean.SecretKey;
+import io.github.leleueri.keyring.exception.KeyringApplicativeException;
 import io.github.leleueri.keyring.provider.KeystoreProvider;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
@@ -42,31 +43,48 @@ public class KeystoreVerticle extends AbstractVerticle {
         // - list all secret key aliases
         vertx.eventBus().consumer(LIST_ALIASES, message -> {
             System.out.println("[Worker] list all aliases " + Thread.currentThread().getName());
-            Set<String> aliases = provider.listAlias();
-            if (aliases.isEmpty()) {
-                message.reply(null);
-            } else {
-                message.reply(Json.encodePrettily(aliases)); // TODO to reply with an object we must have a message codec
+            try {
+                Set<String> aliases = provider.listAlias();
+                if (aliases.isEmpty()) {
+                    message.reply(null);
+                } else {
+                    message.reply(Json.encodePrettily(aliases)); // to reply with an object we must have a message codec
+                }
+            } catch (KeyringApplicativeException e) {
+                // TODO LOGGER ERROR
+                message.fail(500, e.getMessage()); // create an error object to return in JSON format??
             }
         });
+
         // - list all secret keys
         vertx.eventBus().consumer(LIST_SECRET_KEYS, message -> {
             System.out.println("[Worker] list all keys " + Thread.currentThread().getName());
-            Map<String, SecretKey> keys = provider.listSecretKeys();
-            if (keys.isEmpty()) {
-                message.reply(null);
-            } else {
-                message.reply(Json.encodePrettily(keys)); // TODO to reply with an object we must have a message codec
+            try {
+                Map<String, SecretKey> keys = provider.listSecretKeys();
+                if (keys.isEmpty()) {
+                    message.reply(null);
+                } else {
+                    message.reply(Json.encodePrettily(keys)); // to reply with an object we must have a message codec
+                }
+            } catch (KeyringApplicativeException e) {
+                // TODO LOGGER ERROR
+                message.fail(500, e.getMessage()); // create an error object to return in JSON format??
             }
         });
+
         // - Get a secret key description
         vertx.eventBus().consumer(GET_SECRET_KEY, message -> {
             System.out.println("[Worker] get a key " + Thread.currentThread().getName());
-            Optional<SecretKey> key = provider.getSecretKey((String) message.body());
-            if (key.isPresent()) {
-                message.reply(Json.encodePrettily(key.get())); // TODO to reply with an object we must have a message codec
-            } else {
-                message.reply(null);
+            try {
+                Optional<SecretKey> key = provider.getSecretKey((String) message.body());
+                if (key.isPresent()) {
+                    message.reply(Json.encodePrettily(key.get())); // to reply with an object we must have a message codec
+                } else {
+                    message.reply(null);
+                }
+            } catch (KeyringApplicativeException e) {
+                // TODO LOGGER ERROR
+                message.fail(500, e.getMessage()); // create an error object to return in JSON format??
             }
         });
     }
