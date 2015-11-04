@@ -3,17 +3,20 @@ package io.github.leleueri.keyring;
 import io.github.leleueri.keyring.bean.SecretKey;
 import io.github.leleueri.keyring.provider.KeystoreProvider;
 import io.vertx.core.AbstractVerticle;
+import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
+import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.Json;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.StaticHandler;
 
-import javax.swing.text.html.Option;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+
+import static io.github.leleueri.keyring.KeystoreVerticle.*;
 
 /**
  * Created by eric on 07/10/15.
@@ -31,14 +34,7 @@ public class KeyringVerticle extends AbstractVerticle {
         // java -jar target/my-first-app-1.0-SNAPSHOT-fat.jar -conf src/main/conf/my-application-conf.json
         Integer port = config().getInteger("http.port", 8080);
 
-        String type = config().getString("keystore.type", "JKS");
-        String path = config().getString("keystore.path", "keyring.jks");
-        String pwd = config().getString("keystore.password");
-        String keypwd = config().getString("secretkey.password");
-
-        provider = new KeystoreProvider(type, pwd, path, keypwd); // TODO check if the Provider is unique (may have several instance if the Keyring verticle is loaded more than once)
-
-        // Create a router object.
+         // Create a router object.
         Router router = Router.router(vertx);
 
         // Bind "/" to our hello message - so we are still compatible.
@@ -52,25 +48,53 @@ public class KeyringVerticle extends AbstractVerticle {
         // Serve static resources from the /assets directory
         router.route("/assets/*").handler(StaticHandler.create("assets"));
 
-        router.route("/keyring/aliases").handler(this::getAllKeyNames);
+        router.route("/keyring/aliases").handler(this::getAliases);
         router.route("/keyring/secret-keys").handler(this::getAllKeys);
-        router.route("/keyring/secret-key/:alias").handler(this::getAllKeys);
+        router.route("/keyring/secret-key/:alias").handler(this::getKey);
 
+
+        // Define keystore verticle
+        // Acording to the configuration a worker is never executed concurrently by Vert.x by more than one thread,
+        // but can executed by different threads at different times.
+        vertx.deployVerticle("io.github.leleueri.keyring.KeystoreVerticle",
+                new DeploymentOptions()
+                        .setWorker(true) // as worker (like an actor so no concurrent acces on it!)
+                        .setConfig(config())// provides the config object to this new verticle
+        );
 
         // Create the HTTP server and pass the "accept" method to the request handler.
         vertx
-            .createHttpServer()
+                .createHttpServer()
                 .requestHandler(router::accept)
                 .listen(port, result -> {
                     if (result.succeeded()) {
                         fut.complete();
                     } else {
                         fut.fail(result.cause());
-                }
-            });
+                    }
+                });
     }
 
-    public void getAllKeyNames(RoutingContext routingContext) {
+    public void getAliases(RoutingContext routingContext) {
+
+        vertx.eventBus().send(
+                LIST_ALIASES,
+                "",
+                new DeliveryOptions().setSendTimeout(60000), // TODO configure timeout and manage failures
+                r -> {
+                    System.out.println("[Main] getAllAliases Receiving reply in " + Thread.currentThread().getName());
+                    String aliases = (String)r.result().body();
+                    if (aliases == null || aliases.isEmpty()) {
+                        routingContext.response().setStatusCode(204).end();
+                    } else {
+                        routingContext.response()
+                                .putHeader("content-type", "application/json; charset=utf-8")
+                                .end(aliases);
+                    }
+                }
+        );
+
+        /*
         vertx.executeBlocking(future -> {
             // Call some blocking API that takes a significant amount of time to return
             future.complete(provider.listAlias());
@@ -84,9 +108,9 @@ public class KeyringVerticle extends AbstractVerticle {
                         .end(Json.encodePrettily(result));
             }
         });
+        */
 
         /*
-
         // blocking way (because Keystore action may be blocking)
         routingContext.response()
                 .putHeader("content-type", "application/json; charset=utf-8")
@@ -95,38 +119,46 @@ public class KeyringVerticle extends AbstractVerticle {
     }
 
     public void getAllKeys(RoutingContext routingContext) {
-        // TODO try worker verticle to handle blocking action
-        vertx.executeBlocking(future -> {
-            future.complete(provider.listSecretKeys());
-        }, res -> {
-            final Map<String, SecretKey> result = (Map<String, SecretKey> )res.result();
-            if (result.isEmpty()) {
-                routingContext.response().setStatusCode(204).end();
-            } else {
-                routingContext.response()
-                        .putHeader("content-type", "application/json; charset=utf-8")
-                        .end(Json.encodePrettily(result));
-            }
-        });
 
+        vertx.eventBus().send(
+                LIST_SECRET_KEYS,
+                "",
+                new DeliveryOptions().setSendTimeout(60000), // TODO configure timeout and manage failures
+                r -> {
+                    System.out.println("[Main] getAllKeys Receiving reply in " + Thread.currentThread().getName());
+                    String secretKeys = (String)r.result().body();
+                    if (secretKeys == null || secretKeys.isEmpty()) {
+                        routingContext.response().setStatusCode(204).end();
+                    } else {
+                        routingContext.response()
+                                .putHeader("content-type", "application/json; charset=utf-8")
+                                .end(secretKeys);
+                    }
+                }
+        );
     }
 
     public void getKey(RoutingContext routingContext) {
-        Optional<String> aliasParam = Optional.of(routingContext.request().getParam("id"));
+        Optional<String> aliasParam = Optional.ofNullable(routingContext.request().getParam("alias"));
         if (aliasParam.isPresent()) {
-            vertx.executeBlocking(future -> {
-                future.complete(provider.getSecretKey(aliasParam.get()));
-            }, res -> {
-                Optional<SecretKey> result = (Optional<SecretKey>)res.result();
-                if (result.isPresent()) {
-                    routingContext.response()
-                            .putHeader("content-type", "application/json; charset=utf-8")
-                            .end(Json.encodePrettily(res.result()));
-                } else {
-                    routingContext.response().setStatusCode(404).end();
-                }
-            });
-        } else {
+            vertx.eventBus().send(
+                    GET_SECRET_KEY,
+                    aliasParam.get(),
+                    new DeliveryOptions().setSendTimeout(60000), // TODO configure timeout and manage failures
+                    r -> {
+                        System.out.println("[Main] getKey Receiving reply in " + Thread.currentThread().getName());
+                        String secretKey = (String) r.result().body();
+                        if (secretKey == null || secretKey.isEmpty()) {
+
+                            routingContext.response().setStatusCode(404).end();
+                            } else {
+                            routingContext.response()
+                                .putHeader("content-type", "application/json; charset=utf-8")
+                                .end(secretKey);
+                            }
+                        }
+            );
+        }else {
             routingContext.response().setStatusCode(400).end();
         }
     }
