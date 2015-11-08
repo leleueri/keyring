@@ -4,16 +4,9 @@ import io.github.leleueri.keyring.bean.SecretKey;
 import io.github.leleueri.keyring.exception.KeyringApplicativeException;
 import io.github.leleueri.keyring.provider.KeystoreProvider;
 import io.vertx.core.AbstractVerticle;
-import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
-import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.Json;
-import io.vertx.core.logging.LoggerFactory;
-import io.vertx.ext.web.Router;
-import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.handler.StaticHandler;
 
-import javax.swing.text.html.Option;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -28,6 +21,7 @@ public class KeystoreVerticle extends AbstractVerticle {
     public static final String LIST_ALIASES = "keystore.list.aliases";
     public static final String LIST_SECRET_KEYS = "keystore.list.keys";
     public static final String GET_SECRET_KEY = "keystore.get.key";
+    public static final String POST_SECRET_KEY = "keystore.post.key";
 
     @Override
     public void start(Future<Void> fut) throws Exception {
@@ -81,6 +75,41 @@ public class KeystoreVerticle extends AbstractVerticle {
                     message.reply(Json.encodePrettily(key.get())); // to reply with an object we must have a message codec
                 } else {
                     message.reply(null);
+                }
+            } catch (KeyringApplicativeException e) {
+                // TODO LOGGER ERROR
+                message.fail(500, e.getMessage()); // create an error object to return in JSON format??
+            }
+        });
+
+
+
+        // - create a secret key description
+        vertx.eventBus().consumer(POST_SECRET_KEY, message -> {
+            System.out.println("[Worker] post a key " + Thread.currentThread().getName());
+            try {
+                Optional<SecretKey> key = Optional.ofNullable((String) message.body()).map(str -> Json.decodeValue(str, SecretKey.class));
+                if (key.isPresent()) {
+
+                    final SecretKey secretKey = key.get();
+                    if (secretKey.getAlias() == null || secretKey.getAlias().isEmpty()) {
+                        message.fail(400, "Alias is missing");
+                    }
+                    if (secretKey.getB64Key() == null || secretKey.getB64Key().isEmpty()) {
+                        message.fail(400, "Key is missing");
+                    }
+                    if (secretKey.getAlgorithm() == null || secretKey.getAlgorithm().isEmpty()) {
+                        message.fail(400, "Algorithm is missing");
+                    }
+
+                    if(provider.getSecretKey(secretKey.getAlias()).isPresent()) {
+                        message.fail(409, "SecretKey already exists");
+                    } else {
+                        provider.addSecretKey(secretKey);
+                        message.reply(secretKey.getAlias());
+                    }
+                } else {
+                    message.fail(400, "SecretKey is missing from the request body");
                 }
             } catch (KeyringApplicativeException e) {
                 // TODO LOGGER ERROR

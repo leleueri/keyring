@@ -1,6 +1,5 @@
 package io.github.leleueri.keyring;
 
-import io.github.leleueri.keyring.bean.SecretKey;
 import io.github.leleueri.keyring.provider.KeystoreProvider;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.AsyncResult;
@@ -11,15 +10,11 @@ import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.ReplyException;
 import io.vertx.core.eventbus.ReplyFailure;
 import io.vertx.core.http.HttpServerOptions;
-import io.vertx.core.http.HttpServerResponse;
-import io.vertx.core.json.Json;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.handler.StaticHandler;
+import io.vertx.ext.web.handler.BodyHandler;
 
-import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 import static io.github.leleueri.keyring.KeystoreVerticle.*;
 
@@ -46,20 +41,21 @@ public class KeyringVerticle extends AbstractVerticle {
          // Create a router object.
         Router router = Router.router(vertx);
 
-        // Bind "/" to our hello message - so we are still compatible.
-        router.route("/").handler(routingContext -> {
-            HttpServerResponse response = routingContext.response();
-            response
-                    .putHeader("content-type", "text/html")
-                    .end("<h1>Hello from my first Vert.x 3 application</h1>");
-        });
+        /* // HTTP method may be sepcified (by default, all methods match)
+        router.route("/keyring/aliases").method(HttpMethod.GET).handler(this::getAliases);
+        router.route("/keyring/secret-keys").method(HttpMethod.GET).handler(this::getAllKeys);
+        router.route("/keyring/secret-key/:alias").method(HttpMethod.GET).handler(this::getKey);
+        router.route("/keyring/secret-key/:alias").method(HttpMethod.PUT).handler(this::getKey);
+        */
 
-        // Serve static resources from the /assets directory
-        router.route("/assets/*").handler(StaticHandler.create("assets"));
+        // Http method may also be specified with a well named "route" method ...
+        // Routes are matched in the order of they addition into the route...
+        router.route().handler(BodyHandler.create());
+        router.get("/keyring/aliases").produces("application/json").handler(this::getAliases);
+        router.get("/keyring/secret-keys").produces("application/json").handler(this::getAllKeys);
+        router.get("/keyring/secret-key/:alias").produces("application/json").handler(this::getKey);
+        router.post("/keyring/secret-keys").consumes("application/json").handler(this::putKey);
 
-        router.route("/keyring/aliases").handler(this::getAliases);
-        router.route("/keyring/secret-keys").handler(this::getAllKeys);
-        router.route("/keyring/secret-key/:alias").handler(this::getKey);
 
         // Define keystore verticle
         // Acording to the configuration a worker is never executed concurrently by Vert.x by more than one thread,
@@ -190,6 +186,32 @@ public class KeyringVerticle extends AbstractVerticle {
                                         .putHeader("content-type", "application/json; charset=utf-8")
                                         .end(secretKey);
                             }
+                        } else {
+                            // on failure, the resultHander contains a Throwable accessible through "cause" method
+                            manageFailedResult(routingContext, r);
+                        }
+                    }
+            );
+        } else {
+            routingContext.response().setStatusCode(400).end();
+        }
+    }
+
+    public void putKey(RoutingContext routingContext) {
+        Optional<String> body = Optional.ofNullable(routingContext.getBodyAsString());
+        if (body.isPresent()) {
+            vertx.eventBus().send(
+                    POST_SECRET_KEY,
+                    body.get(),
+                    new DeliveryOptions().setSendTimeout(processingTimeOut),
+                    r -> {
+                        System.out.println("[Main] postKey Receiving reply in " + Thread.currentThread().getName());
+                        if (r.succeeded()) {
+                            String secretKey = (String) r.result().body();
+                            routingContext.response().setStatusCode(201)
+                                    .putHeader("content-type", "application/json; charset=utf-8")
+                                    .putHeader("Location", "/keyring/secret-key/" + secretKey) // TODO how to build location based on a route
+                                    .end();
                         } else {
                             // on failure, the resultHander contains a Throwable accessible through "cause" method
                             manageFailedResult(routingContext, r);
