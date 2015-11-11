@@ -1,6 +1,6 @@
 package io.github.leleueri.keyring;
 
-import io.github.leleueri.keyring.provider.KeystoreProvider;
+import io.github.leleueri.keyring.exception.KeyringConfigurationException;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.DeploymentOptions;
@@ -9,21 +9,28 @@ import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.Message;
 import io.vertx.core.eventbus.ReplyException;
 import io.vertx.core.eventbus.ReplyFailure;
+import io.vertx.core.http.ClientAuth;
 import io.vertx.core.http.HttpServerOptions;
+import io.vertx.core.json.Json;
+import io.vertx.core.net.JksOptions;
+import io.vertx.core.net.PfxOptions;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
+import static io.github.leleueri.keyring.ConfigConstants.SERVER_SSL_TRUSTSTORE_PWD;
+import static io.github.leleueri.keyring.ConfigConstants.SERVER_SSL_TRUSTSTORE_PATH;
 import static io.github.leleueri.keyring.KeystoreVerticle.*;
 
+import static io.github.leleueri.keyring.ConfigConstants.*;
 /**
  * Created by eric on 07/10/15.
  */
 public class KeyringVerticle extends AbstractVerticle {
-
-    private KeystoreProvider provider;
 
     private int processingTimeOut;
 
@@ -34,9 +41,9 @@ public class KeyringVerticle extends AbstractVerticle {
 
         // Retrieve the port from the configuration,
         // default to 8080.
-        Integer port = config().getInteger("http.port", 8080);
+        Integer port = config().getInteger(SERVER_HTTP_PORT, SERVER_HTTP_DEFAULT_PORT);
         // default processing timeOut
-        processingTimeOut = config().getInteger("process.timeout", 10_000);
+        processingTimeOut = config().getInteger(SERVER_PROCESS_TIMEOUT, SERVER_DEFAULT_PROCESS_TIMEOUT);
 
          // Create a router object.
         Router router = Router.router(vertx);
@@ -54,8 +61,8 @@ public class KeyringVerticle extends AbstractVerticle {
         router.get("/keyring/aliases").produces("application/json").handler(this::getAliases);
         router.get("/keyring/secret-keys").produces("application/json").handler(this::getAllKeys);
         router.get("/keyring/secret-key/:alias").produces("application/json").handler(this::getKey);
+        router.delete("/keyring/secret-key/:alias").produces("application/json").handler(this::deleteKey);
         router.post("/keyring/secret-keys").consumes("application/json").handler(this::putKey);
-
 
         // Define keystore verticle
         // Acording to the configuration a worker is never executed concurrently by Vert.x by more than one thread,
@@ -66,17 +73,66 @@ public class KeyringVerticle extends AbstractVerticle {
                         .setConfig(config())// provides the config object to this new verticle
         );
 
+        HttpServerOptions httpOptions = getHttpServerOptions();
         // Create the HTTP server and pass the "accept" method to the request handler.
         vertx
-                .createHttpServer(new HttpServerOptions())
-                .requestHandler(router::accept)
-                .listen(port, result -> {
-                    if (result.succeeded()) {
-                        fut.complete();
-                    } else {
-                        fut.fail(result.cause());
-                    }
-                });
+            .createHttpServer(httpOptions)
+            .requestHandler(router::accept)
+            .listen(port, result -> {
+                if (result.succeeded()) {
+                    fut.complete();
+                } else {
+                    fut.fail(result.cause());
+                }
+            });
+    }
+
+    private HttpServerOptions getHttpServerOptions() {
+        HttpServerOptions httpOptions = null;
+        final boolean useSSL = config().getBoolean(SERVER_USE_SSL, false);
+        if (useSSL) {
+            httpOptions = new HttpServerOptions().setSsl(true);
+
+            final String keystoreType = config().getString(SERVER_SSL_KEYSTORE_TYPE);
+            switch (keystoreType) {
+                case SERVER_SSL_TYPE_JKS:
+                    httpOptions.setKeyStoreOptions(new JksOptions().
+                        setPath(config().getString(SERVER_SSL_KEYSTORE_PATH)).
+                            setPassword(config().getString(SERVER_SSL_KEYSTORE_PWD)));
+                    break;
+                case SERVER_SSL_TYPE_PKCS12:
+                    httpOptions.setPfxKeyCertOptions(new PfxOptions().
+                            setPath(config().getString(SERVER_SSL_KEYSTORE_PATH)).
+                            setPassword(config().getString(SERVER_SSL_KEYSTORE_PWD)));
+                    break;
+                default:
+                    throw new KeyringConfigurationException("SSL Keystore type is invalid, expected JKS or P12");
+            }
+
+            final boolean clientAuth = config().getBoolean(SERVER_SSL_CLIENT_AUTH, false);
+            if (clientAuth) {
+                httpOptions.setClientAuth(ClientAuth.REQUIRED);
+
+                final String truststoreType = config().getString(SERVER_SSL_TRUSTSTORE_TYPE);
+                switch (truststoreType) {
+                    case SERVER_SSL_TYPE_JKS:
+                        httpOptions.setTrustStoreOptions(new JksOptions().
+                                setPath(config().getString(SERVER_SSL_TRUSTSTORE_PATH)).
+                                setPassword(config().getString(SERVER_SSL_TRUSTSTORE_PWD)));
+                        break;
+                    case SERVER_SSL_TYPE_PKCS12:
+                        httpOptions.setPfxTrustOptions(new PfxOptions().
+                                setPath(config().getString(SERVER_SSL_TRUSTSTORE_PATH)).
+                                setPassword(config().getString(SERVER_SSL_TRUSTSTORE_PWD)));
+                        break;
+                    default:
+                        throw new KeyringConfigurationException("SSL truststore type is invalid, expected JKS or P12");
+                }
+            }
+        } else {
+            httpOptions = new HttpServerOptions();
+        }
+        return httpOptions;
     }
 
     public void getAliases(RoutingContext routingContext) {
@@ -139,12 +195,15 @@ public class KeyringVerticle extends AbstractVerticle {
     }
 
     private void responseWithError(RoutingContext routingContext, int status, String message) {
+        Map<String, String> body = new HashMap<>();
+        body.put("message", message);
         routingContext.response().setStatusCode(status)
                 .putHeader("content-type", "application/json; charset=utf-8")
-                .end(message);
+                .end(Json.encodePrettily(body));
     }
 
     public void getAllKeys(RoutingContext routingContext) {
+        System.out.println("[Main] getAllKeys Received by " + Thread.currentThread().getName());
         vertx.eventBus().send(
                 LIST_SECRET_KEYS,
                 "",
@@ -211,6 +270,30 @@ public class KeyringVerticle extends AbstractVerticle {
                             routingContext.response().setStatusCode(201)
                                     .putHeader("content-type", "application/json; charset=utf-8")
                                     .putHeader("Location", "/keyring/secret-key/" + secretKey) // TODO how to build location based on a route
+                                    .end();
+                        } else {
+                            // on failure, the resultHander contains a Throwable accessible through "cause" method
+                            manageFailedResult(routingContext, r);
+                        }
+                    }
+            );
+        } else {
+            routingContext.response().setStatusCode(400).end();
+        }
+    }
+
+    public void deleteKey(RoutingContext routingContext) {
+        Optional<String> aliasParam = Optional.ofNullable(routingContext.request().getParam("alias"));
+        if (aliasParam.isPresent()) {
+            vertx.eventBus().send(
+                    DELETE_SECRET_KEY,
+                    aliasParam.get(),
+                    new DeliveryOptions().setSendTimeout(processingTimeOut),
+                    r -> {
+                        System.out.println("[Main] deleteKey Receiving reply in " + Thread.currentThread().getName());
+                        if (r.succeeded()) {
+                            routingContext.response().setStatusCode(204)
+                                    .putHeader("content-type", "application/json; charset=utf-8")
                                     .end();
                         } else {
                             // on failure, the resultHander contains a Throwable accessible through "cause" method

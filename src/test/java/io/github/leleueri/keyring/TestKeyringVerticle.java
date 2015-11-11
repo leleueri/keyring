@@ -8,11 +8,14 @@ import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.net.ServerSocket;
+import java.nio.file.Paths;
 
+import static io.github.leleueri.keyring.ConfigConstants.*;
 /**
  * Created by eric on 07/10/15.
  */
@@ -38,16 +41,21 @@ public class TestKeyringVerticle {
         socket.close();
     }
 
+
     @Before
     public void setUp(TestContext context) throws Exception {
         reservePort();
 
         // deploy the vertx with a custom configuration
-        DeploymentOptions options = new DeploymentOptions().setConfig(new JsonObject().put("http.port", port)
-                    .put("keystore.path", "KeyringKeystore")
-                .put("keystore.type", "JKS")
-                .put("keystore.password", "simplemotdepasse")
-                .put("secretkey.password", "simplemotdepassecle"));
+        final String path = "target/KeyringKeystore.jceks";
+        Paths.get(path).toFile().delete();
+
+        DeploymentOptions options = new DeploymentOptions()
+                .setWorker(true)
+                .setConfig(new JsonObject().put("http.port", port)
+                        .put(APP_KEYSTORE_DEFAULT_PATH, path)
+                        .put(APP_KEYSTORE_PWD, "simplemotdepasse")
+                        .put(APP_KEYSTORE_SECRET_KEY_PWD, "simplemotdepassecle"));
 
         vertx = Vertx.vertx();
         vertx.deployVerticle(KeyringVerticle.class.getName(), options, context.asyncAssertSuccess());
@@ -59,13 +67,13 @@ public class TestKeyringVerticle {
     }
 
     @Test
-    public void testMyApplication(TestContext context) {
+    public void test(TestContext context) {
         final Async async = context.async();
 
-        vertx.createHttpClient().getNow(port, "localhost", "/",
+        vertx.createHttpClient().getNow(port, "localhost", "/keyring/secret-keys/",
                 response -> {
-                    response.handler(body -> {
-                        context.assertTrue(body.toString().contains("Hello"));
+                    response.bodyHandler(body -> {
+                        System.out.println(">>"+body);
                         async.complete();
                     });
                 });

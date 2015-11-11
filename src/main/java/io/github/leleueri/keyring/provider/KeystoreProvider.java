@@ -7,14 +7,11 @@ import io.vertx.core.Handler;
 import sun.misc.BASE64Decoder;
 import sun.misc.BASE64Encoder;
 
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.*;
-import java.io.FileInputStream;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.util.*;
@@ -59,6 +56,15 @@ public class KeystoreProvider {
         try {
             ks = KeyStore.getInstance(type);
             char[] password = pwd.toCharArray();
+
+            File ksFile = Paths.get(path).toFile();
+            if (!ksFile.exists()) {
+                ks.load(null, null);
+                try (FileOutputStream fos = new FileOutputStream(ksFile);) {
+                    this.ks.store(fos, pwd.toCharArray());
+                }
+            }
+
             try (FileInputStream fis = new FileInputStream(path);) {
                 ks.load(fis, password);
             }
@@ -129,24 +135,38 @@ public class KeystoreProvider {
         return result;
     }
 
-
     public String addSecretKey(SecretKey sKey) {
         String alias = sKey.getAlias();
         try {
             SecretKeySpec keySpec = new SecretKeySpec(new BASE64Decoder().decodeBuffer(sKey.getB64Key()), sKey.getAlgorithm());
             this.ks.setKeyEntry(alias, keySpec, keyPassword.toCharArray(), null);
 
-            Path newFile = Paths.get(path+".tmp");
-            this.ks.store(new FileOutputStream(newFile.toFile()), pwd.toCharArray());
-            newFile.toFile().renameTo(Paths.get(path).toFile());
-
-            loadKeystore(type, pwd, path, keyPassword);
+            persistChanges();
             return alias;
         } catch (KeyStoreException|NoSuchAlgorithmException|CertificateException e) {
             e.printStackTrace();
             throw new KeyringApplicativeException("Unable to add alias '" + alias + "' into the keystore instance", e);
         } catch (IOException e) {
             throw new KeyringApplicativeException("Unable to save the key", e);
+        }
+    }
+
+    private void persistChanges() throws KeyStoreException, IOException, NoSuchAlgorithmException, CertificateException {
+        Path newFile = Paths.get(path + ".tmp");
+        try (FileOutputStream fos = new FileOutputStream(newFile.toFile());) {
+            this.ks.store(fos, pwd.toCharArray());
+        }
+        newFile.toFile().renameTo(Paths.get(path).toFile());
+
+        loadKeystore(type, pwd, path, keyPassword);
+    }
+
+    public void deleteSecretKey(String alias) {
+        try {
+            ks.deleteEntry(alias);
+            persistChanges();
+        } catch (Exception e) {
+            throw new KeyringApplicativeException("Unable to delete alias '" + alias + "' from the keystore instance", e);
         }
     }
 }
