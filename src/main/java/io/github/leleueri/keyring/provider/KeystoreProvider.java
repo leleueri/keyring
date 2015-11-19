@@ -103,7 +103,7 @@ public class KeystoreProvider {
 
     public Optional<SecretKey> getSecretKey(String alias) {
         try {
-            final Optional<Key> optKey = Optional.of(ks.getKey(alias, keyPassword.toCharArray()));
+            final Optional<Key> optKey = Optional.ofNullable(ks.getKey(alias, keyPassword.toCharArray()));
             return optKey.map(k -> {
                 SecretKey sKey = new SecretKey();
                 sKey.setAlias(alias);

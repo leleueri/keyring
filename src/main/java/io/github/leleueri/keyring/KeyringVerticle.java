@@ -21,6 +21,7 @@ import io.vertx.ext.web.handler.BodyHandler;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.logging.Logger;
 
 import static io.github.leleueri.keyring.ConfigConstants.SERVER_SSL_TRUSTSTORE_PWD;
 import static io.github.leleueri.keyring.ConfigConstants.SERVER_SSL_TRUSTSTORE_PATH;
@@ -34,6 +35,8 @@ public class KeyringVerticle extends AbstractVerticle {
 
     private int processingTimeOut;
 
+    private final Logger LOGGER = Logger.getLogger(getClass().getName());
+
     @java.lang.Override
     public void start(Future<java.lang.Void> fut) throws Exception {
         // to launch the application taking a configuration file use :
@@ -45,7 +48,18 @@ public class KeyringVerticle extends AbstractVerticle {
         // default processing timeOut
         processingTimeOut = config().getInteger(SERVER_PROCESS_TIMEOUT, SERVER_DEFAULT_PROCESS_TIMEOUT);
 
+        // Define keystore verticle
+        // Acording to the configuration a worker is never executed concurrently by Vert.x by more than one thread,
+        // but can executed by different threads at different times.
+        LOGGER.info("Deploy KeystoreVerticle");
+        vertx.deployVerticle("io.github.leleueri.keyring.KeystoreVerticle",
+                new DeploymentOptions()
+                        .setWorker(true) // as worker (like an actor so no concurrent acces on it!)
+                        .setConfig(config())// provides the config object to this new verticle
+        );
+
          // Create a router object.
+        LOGGER.info("Create Route object");
         Router router = Router.router(vertx);
 
         /* // HTTP method may be sepcified (by default, all methods match)
@@ -57,22 +71,16 @@ public class KeyringVerticle extends AbstractVerticle {
 
         // Http method may also be specified with a well named "route" method ...
         // Routes are matched in the order of they addition into the route...
+        LOGGER.info("Define all routes");
         router.route().handler(BodyHandler.create());
-        router.get("/keyring/aliases").produces("application/json").handler(this::getAliases);
-        router.get("/keyring/secret-keys").produces("application/json").handler(this::getAllKeys);
-        router.get("/keyring/secret-key/:alias").produces("application/json").handler(this::getKey);
-        router.delete("/keyring/secret-key/:alias").produces("application/json").handler(this::deleteKey);
+        router.get("/keyring/aliases").handler(this::getAliases);
+        router.get("/keyring/secret-keys").handler(this::getAllKeys);
+        router.get("/keyring/secret-key/:alias").handler(this::getKey);
+        router.delete("/keyring/secret-key/:alias").handler(this::deleteKey);
         router.post("/keyring/secret-keys").consumes("application/json").handler(this::putKey);
 
-        // Define keystore verticle
-        // Acording to the configuration a worker is never executed concurrently by Vert.x by more than one thread,
-        // but can executed by different threads at different times.
-        vertx.deployVerticle("io.github.leleueri.keyring.KeystoreVerticle",
-                new DeploymentOptions()
-                        .setWorker(true) // as worker (like an actor so no concurrent acces on it!)
-                        .setConfig(config())// provides the config object to this new verticle
-        );
 
+        LOGGER.info("Start WEB server");
         HttpServerOptions httpOptions = getHttpServerOptions();
         // Create the HTTP server and pass the "accept" method to the request handler.
         vertx
@@ -136,21 +144,22 @@ public class KeyringVerticle extends AbstractVerticle {
     }
 
     public void getAliases(RoutingContext routingContext) {
-
         vertx.eventBus().send(
                 LIST_ALIASES,
                 "",
                 new DeliveryOptions().setSendTimeout(processingTimeOut),
                 r -> {
-                    System.out.println("[Main] getAllAliases Receiving reply in " + Thread.currentThread().getName());
+                    LOGGER.info("[Main] getAllAliases Receiving reply in " + Thread.currentThread().getName());
                     if (r.succeeded()) {
                         String aliases = (String) r.result().body();
                         if (aliases == null || aliases.isEmpty()) {
                             routingContext.response().setStatusCode(204).end();
+                            LOGGER.info("[Main] getAllAliases Receiving opuptu in " + Thread.currentThread().getName());
                         } else {
                             routingContext.response()
                                     .putHeader("content-type", "application/json; charset=utf-8")
                                     .end(aliases);
+                            LOGGER.info("[Main] getAllAliases Receiving opuptu in " + Thread.currentThread().getName());
                         }
                     } else {
                         // on failure, the resultHander contains a Throwable accessible through "cause" method
@@ -185,6 +194,7 @@ public class KeyringVerticle extends AbstractVerticle {
 
     private void manageFailedResult(RoutingContext routingContext, AsyncResult<Message<Object>> r) {
         ReplyException replyExc = (ReplyException) r.cause();
+        LOGGER.throwing(getClass().getName(), "Exception : " + replyExc.getMessage(), replyExc);
         if (replyExc.failureType() == ReplyFailure.TIMEOUT) {
             responseWithError(routingContext, 503, "Server unavailable, retry later");
         } else if (replyExc.failureType() == ReplyFailure.NO_HANDLERS) {
@@ -209,7 +219,7 @@ public class KeyringVerticle extends AbstractVerticle {
                 "",
                 new DeliveryOptions().setSendTimeout(processingTimeOut),
                 r -> {
-                    System.out.println("[Main] getAllKeys Receiving reply in " + Thread.currentThread().getName());
+                    LOGGER.info("[Main] getAllKeys Receiving reply in " + Thread.currentThread().getName());
                     if (r.succeeded()) {
                         String secretKeys = (String) r.result().body();
                         if (secretKeys == null || secretKeys.isEmpty()) {
@@ -235,7 +245,7 @@ public class KeyringVerticle extends AbstractVerticle {
                     aliasParam.get(),
                     new DeliveryOptions().setSendTimeout(processingTimeOut),
                     r -> {
-                        System.out.println("[Main] getKey Receiving reply in " + Thread.currentThread().getName());
+                        LOGGER.info("[Main] getKey Receiving reply in " + Thread.currentThread().getName());
                         if (r.succeeded()) {
                             String secretKey = (String) r.result().body();
                             if (secretKey == null || secretKey.isEmpty()) {
@@ -264,7 +274,7 @@ public class KeyringVerticle extends AbstractVerticle {
                     body.get(),
                     new DeliveryOptions().setSendTimeout(processingTimeOut),
                     r -> {
-                        System.out.println("[Main] postKey Receiving reply in " + Thread.currentThread().getName());
+                        LOGGER.info("[Main] postKey Receiving reply in " + Thread.currentThread().getName());
                         if (r.succeeded()) {
                             String secretKey = (String) r.result().body();
                             routingContext.response().setStatusCode(201)
@@ -290,7 +300,7 @@ public class KeyringVerticle extends AbstractVerticle {
                     aliasParam.get(),
                     new DeliveryOptions().setSendTimeout(processingTimeOut),
                     r -> {
-                        System.out.println("[Main] deleteKey Receiving reply in " + Thread.currentThread().getName());
+                        LOGGER.info("[Main] deleteKey Receiving reply in " + Thread.currentThread().getName());
                         if (r.succeeded()) {
                             routingContext.response().setStatusCode(204)
                                     .putHeader("content-type", "application/json; charset=utf-8")
